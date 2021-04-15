@@ -10,13 +10,13 @@ require (
 	github.com/containerd/ttrpc v1.0.2
 	github.com/containernetworking/cni v0.8.1
 	github.com/containernetworking/plugins v0.9.1
-	github.com/containers/buildah v1.20.0
+	github.com/containers/buildah v1.20.1
 	github.com/containers/common v0.35.4
 	github.com/containers/conmon v2.0.20+incompatible
 	github.com/containers/image/v5 v5.11.0
 	github.com/containers/ocicrypt v1.1.0
 	github.com/containers/podman/v3 v3.1.0
-	github.com/containers/storage v1.28.1
+	github.com/containers/storage v1.29.0
 	github.com/coreos/go-systemd/v22 v22.3.0
 	github.com/cpuguy83/go-md2man v1.0.10
 	github.com/creack/pty v1.1.11
@@ -34,7 +34,7 @@ require (
 	github.com/google/uuid v1.2.0
 	github.com/grpc-ecosystem/go-grpc-middleware v1.2.2
 	github.com/json-iterator/go v1.1.10
-	github.com/onsi/ginkgo v1.15.2
+	github.com/onsi/ginkgo v1.16.1
 	github.com/onsi/gomega v1.11.0
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.0.2-0.20200206005212-79b036d80240
