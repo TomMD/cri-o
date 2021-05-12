@@ -16,8 +16,8 @@ require (
 	github.com/containers/image/v5 v5.11.0
 	github.com/containers/ocicrypt v1.1.0
 	github.com/containers/podman/v3 v3.1.0
-	github.com/containers/storage v1.28.1
-	github.com/coreos/go-systemd/v22 v22.3.0
+	github.com/containers/storage v1.30.3
+	github.com/coreos/go-systemd/v22 v22.3.1
 	github.com/cpuguy83/go-md2man v1.0.10
 	github.com/creack/pty v1.1.11
 	github.com/cri-o/ocicni v0.2.1-0.20210301205850-541cf7c703cf
@@ -33,15 +33,15 @@ require (
 	github.com/google/renameio v1.0.0
 	github.com/google/uuid v1.2.0
 	github.com/grpc-ecosystem/go-grpc-middleware v1.2.2
-	github.com/json-iterator/go v1.1.10
+	github.com/json-iterator/go v1.1.11
 	github.com/onsi/ginkgo v1.15.2
 	github.com/onsi/gomega v1.11.0
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.0.2-0.20200206005212-79b036d80240
-	github.com/opencontainers/runc v1.0.0-rc93
-	github.com/opencontainers/runtime-spec v1.0.3-0.20201121164853-7413a7f753e1
+	github.com/opencontainers/runc v1.0.0-rc94
+	github.com/opencontainers/runtime-spec v1.0.3-0.20210326190908-1c3f411f0417
 	github.com/opencontainers/runtime-tools v0.9.1-0.20200121211434-d1bf3e66ff0a
-	github.com/opencontainers/selinux v1.8.0
+	github.com/opencontainers/selinux v1.8.1
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.10.0
 	github.com/psampaz/go-mod-outdated v0.7.0
@@ -53,7 +53,7 @@ require (
 	github.com/vishvananda/netlink v1.1.1-0.20201029203352-d40f9887b852
 	golang.org/x/net v0.0.0-20210316092652-d523dce5a7f4
 	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
-	golang.org/x/sys v0.0.0-20210324051608-47abb6519492
+	golang.org/x/sys v0.0.0-20210426230700-d19ff857e887
 	google.golang.org/grpc v1.37.0
 	k8s.io/api v0.21.0
 	k8s.io/apimachinery v0.21.0
