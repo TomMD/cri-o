@@ -14,6 +14,7 @@ import (
 	"github.com/containers/storage/pkg/archive"
 	"github.com/containers/storage/pkg/directory"
 	"github.com/containers/storage/pkg/idtools"
+	digest "github.com/opencontainers/go-digest"
 )
 
 // FsMagic unsigned id of the filesystem in use.
@@ -33,7 +34,9 @@ var (
 	// ErrPrerequisites returned when driver does not meet prerequisites.
 	ErrPrerequisites = errors.New("prerequisites for driver not satisfied (wrong filesystem?)")
 	// ErrIncompatibleFS returned when file system is not supported.
-	ErrIncompatibleFS = fmt.Errorf("backing file system is unsupported for this graph driver")
+	ErrIncompatibleFS = errors.New("backing file system is unsupported for this graph driver")
+	// ErrLayerUnknown returned when the specified layer is unknown by the driver.
+	ErrLayerUnknown = errors.New("unknown layer")
 )
 
 //CreateOpts contains optional arguments for Create() and CreateReadWrite()
@@ -57,6 +60,9 @@ type MountOpts struct {
 	// Volatile specifies whether the container storage can be optimized
 	// at the cost of not syncing all the dirty files in memory.
 	Volatile bool
+
+	// DisableShifting forces the driver to not do any ID shifting at runtime.
+	DisableShifting bool
 }
 
 // ApplyDiffOpts contains optional arguments for ApplyDiff methods.
@@ -117,6 +123,7 @@ type ProtoDriver interface {
 	// known to this driver.
 	Cleanup() error
 	// AdditionalImageStores returns additional image stores supported by the driver
+	// This API is experimental and can be changed without bumping the major version number.
 	AdditionalImageStores() []string
 }
 
@@ -163,6 +170,40 @@ type Driver interface {
 	LayerIDMapUpdater
 }
 
+// DriverWithDifferOutput is the result of ApplyDiffWithDiffer
+// This API is experimental and can be changed without bumping the major version number.
+type DriverWithDifferOutput struct {
+	Differ             Differ
+	Target             string
+	Size               int64
+	UIDs               []uint32
+	GIDs               []uint32
+	UncompressedDigest digest.Digest
+	Metadata           string
+	BigData            map[string][]byte
+}
+
+// Differ defines the interface for using a custom differ.
+// This API is experimental and can be changed without bumping the major version number.
+type Differ interface {
+	ApplyDiff(dest string, options *archive.TarOptions) (DriverWithDifferOutput, error)
+}
+
+// DriverWithDiffer is the interface for direct diff access.
+// This API is experimental and can be changed without bumping the major version number.
+type DriverWithDiffer interface {
+	Driver
+	// ApplyDiffWithDiffer applies the changes using the callback function.
+	// If id is empty, then a staging directory is created.  The staging directory is guaranteed to be usable with ApplyDiffFromStagingDirectory.
+	ApplyDiffWithDiffer(id, parent string, options *ApplyDiffOpts, differ Differ) (output DriverWithDifferOutput, err error)
+	// ApplyDiffFromStagingDirectory applies the changes using the specified staging directory.
+	ApplyDiffFromStagingDirectory(id, parent, stagingDirectory string, diffOutput *DriverWithDifferOutput, options *ApplyDiffOpts) error
+	// CleanupStagingDirectory cleanups the staging directory.  It can be used to cleanup the staging directory on errors
+	CleanupStagingDirectory(stagingDirectory string) error
+	// DifferTarget gets the location where files are stored for the layer.
+	DifferTarget(id string) (string, error)
+}
+
 // Capabilities defines a list of capabilities a driver may implement.
 // These capabilities are not required; however, they do determine how a
 // graphdriver can be used.
@@ -178,6 +219,30 @@ type Capabilities struct {
 // can report on their Capabilities.
 type CapabilityDriver interface {
 	Capabilities() Capabilities
+}
+
+// AdditionalLayer reprents a layer that is stored in the additional layer store
+// This API is experimental and can be changed without bumping the major version number.
+type AdditionalLayer interface {
+	// CreateAs creates a new layer from this additional layer
+	CreateAs(id, parent string) error
+
+	// Info returns arbitrary information stored along with this layer (i.e. `info` file)
+	Info() (io.ReadCloser, error)
+
+	// Release tells the additional layer store that we don't use this handler.
+	Release()
+}
+
+// AdditionalLayerStoreDriver is the interface for driver that supports
+// additional layer store functionality.
+// This API is experimental and can be changed without bumping the major version number.
+type AdditionalLayerStoreDriver interface {
+	Driver
+
+	// LookupAdditionalLayer looks up additional layer store by the specified
+	// digest and ref and returns an object representing that layer.
+	LookupAdditionalLayer(d digest.Digest, ref string) (AdditionalLayer, error)
 }
 
 // DiffGetterDriver is the interface for layered file system drivers that
