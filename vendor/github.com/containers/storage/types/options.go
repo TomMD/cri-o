@@ -148,6 +148,11 @@ type StoreOptions struct {
 	AutoNsMinSize uint32 `json:"auto_userns_min_size,omitempty"`
 	// AutoNsMaxSize is the maximum size for an automatic user namespace.
 	AutoNsMaxSize uint32 `json:"auto_userns_max_size,omitempty"`
+	// PullOptions specifies options to be handed to pull managers
+	// This API is experimental and can be changed without bumping the major version number.
+	PullOptions map[string]string `toml:"pull_options"`
+	// DisableVolatile doesn't allow volatile mounts when it is set.
+	DisableVolatile bool `json:"disable-volatile,omitempty"`
 }
 
 // isRootlessDriver returns true if the given storage driver is valid for containers running as non root
@@ -172,7 +177,10 @@ func getRootlessStorageOpts(rootlessUID int, systemOpts StoreOptions) (StoreOpti
 	}
 	opts.RunRoot = rootlessRuntime
 	if systemOpts.RootlessStoragePath != "" {
-		opts.GraphRoot = systemOpts.RootlessStoragePath
+		opts.GraphRoot, err = expandEnvPath(systemOpts.RootlessStoragePath, rootlessUID)
+		if err != nil {
+			return opts, err
+		}
 	} else {
 		opts.GraphRoot = filepath.Join(dataDir, "containers", "storage")
 	}
@@ -278,6 +286,9 @@ func ReloadConfigurationFile(configFile string, storeOptions *StoreOptions) {
 		fmt.Printf("Failed to parse %s %v\n", configFile, err.Error())
 		return
 	}
+
+	// Clear storeOptions of previos settings
+	*storeOptions = StoreOptions{}
 	if config.Storage.Driver != "" {
 		storeOptions.GraphDriverName = config.Storage.Driver
 	}
@@ -299,6 +310,9 @@ func ReloadConfigurationFile(configFile string, storeOptions *StoreOptions) {
 	}
 	for _, s := range config.Storage.Options.AdditionalImageStores {
 		storeOptions.GraphDriverOptions = append(storeOptions.GraphDriverOptions, fmt.Sprintf("%s.imagestore=%s", config.Storage.Driver, s))
+	}
+	for _, s := range config.Storage.Options.AdditionalLayerStores {
+		storeOptions.GraphDriverOptions = append(storeOptions.GraphDriverOptions, fmt.Sprintf("%s.additionallayerstore=%s", config.Storage.Driver, s))
 	}
 	if config.Storage.Options.Size != "" {
 		storeOptions.GraphDriverOptions = append(storeOptions.GraphDriverOptions, fmt.Sprintf("%s.size=%s", config.Storage.Driver, config.Storage.Options.Size))
@@ -338,13 +352,13 @@ func ReloadConfigurationFile(configFile string, storeOptions *StoreOptions) {
 	if err != nil {
 		fmt.Print(err)
 	} else {
-		storeOptions.UIDMap = append(storeOptions.UIDMap, uidmap...)
+		storeOptions.UIDMap = uidmap
 	}
 	gidmap, err := idtools.ParseIDMap([]string{config.Storage.Options.RemapGIDs}, "remap-gids")
 	if err != nil {
 		fmt.Print(err)
 	} else {
-		storeOptions.GIDMap = append(storeOptions.GIDMap, gidmap...)
+		storeOptions.GIDMap = gidmap
 	}
 	storeOptions.RootAutoNsUser = config.Storage.Options.RootAutoUsernsUser
 	if config.Storage.Options.AutoUsernsMinSize > 0 {
@@ -353,11 +367,16 @@ func ReloadConfigurationFile(configFile string, storeOptions *StoreOptions) {
 	if config.Storage.Options.AutoUsernsMaxSize > 0 {
 		storeOptions.AutoNsMaxSize = config.Storage.Options.AutoUsernsMaxSize
 	}
+	if config.Storage.Options.PullOptions != nil {
+		storeOptions.PullOptions = config.Storage.Options.PullOptions
+	}
+
+	storeOptions.DisableVolatile = config.Storage.Options.DisableVolatile
 
 	storeOptions.GraphDriverOptions = append(storeOptions.GraphDriverOptions, cfg.GetGraphDriverOptions(storeOptions.GraphDriverName, config.Storage.Options)...)
 
-	if os.Getenv("STORAGE_OPTS") != "" {
-		storeOptions.GraphDriverOptions = append(storeOptions.GraphDriverOptions, strings.Split(os.Getenv("STORAGE_OPTS"), ",")...)
+	if opts, ok := os.LookupEnv("STORAGE_OPTS"); ok {
+		storeOptions.GraphDriverOptions = strings.Split(opts, ",")
 	}
 	if len(storeOptions.GraphDriverOptions) == 1 && storeOptions.GraphDriverOptions[0] == "" {
 		storeOptions.GraphDriverOptions = nil
