@@ -4,20 +4,20 @@ module github.com/cri-o/cri-o
 
 require (
 	github.com/BurntSushi/toml v0.3.1
-	github.com/Microsoft/go-winio v0.4.17-0.20210211115548-6eac466e5fa3
+	github.com/Microsoft/go-winio v0.5.0
 	github.com/blang/semver v3.5.1+incompatible
-	github.com/containerd/containerd v1.5.0-beta.4
+	github.com/containerd/containerd v1.5.1
 	github.com/containerd/ttrpc v1.0.2
 	github.com/containernetworking/cni v0.8.1
 	github.com/containernetworking/plugins v0.9.1
 	github.com/containers/buildah v1.20.0
-	github.com/containers/common v0.35.4
+	github.com/containers/common v0.39.0
 	github.com/containers/conmon v2.0.20+incompatible
-	github.com/containers/image/v5 v5.11.0
-	github.com/containers/ocicrypt v1.1.0
+	github.com/containers/image/v5 v5.12.0
+	github.com/containers/ocicrypt v1.1.1
 	github.com/containers/podman/v3 v3.1.0
-	github.com/containers/storage v1.28.1
-	github.com/coreos/go-systemd/v22 v22.3.0
+	github.com/containers/storage v1.32.0
+	github.com/coreos/go-systemd/v22 v22.3.1
 	github.com/cpuguy83/go-md2man v1.0.10
 	github.com/creack/pty v1.1.11
 	github.com/cri-o/ocicni v0.2.1-0.20210301205850-541cf7c703cf
@@ -33,15 +33,15 @@ require (
 	github.com/google/renameio v1.0.0
 	github.com/google/uuid v1.2.0
 	github.com/grpc-ecosystem/go-grpc-middleware v1.2.2
-	github.com/json-iterator/go v1.1.10
-	github.com/onsi/ginkgo v1.15.2
-	github.com/onsi/gomega v1.11.0
+	github.com/json-iterator/go v1.1.11
+	github.com/onsi/ginkgo v1.16.2
+	github.com/onsi/gomega v1.12.0
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.0.2-0.20200206005212-79b036d80240
-	github.com/opencontainers/runc v1.0.0-rc93
-	github.com/opencontainers/runtime-spec v1.0.3-0.20201121164853-7413a7f753e1
+	github.com/opencontainers/runc v1.0.0-rc95
+	github.com/opencontainers/runtime-spec v1.0.3-0.20210326190908-1c3f411f0417
 	github.com/opencontainers/runtime-tools v0.9.1-0.20200121211434-d1bf3e66ff0a
-	github.com/opencontainers/selinux v1.8.0
+	github.com/opencontainers/selinux v1.8.1
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.10.0
 	github.com/psampaz/go-mod-outdated v0.7.0
@@ -51,9 +51,9 @@ require (
 	github.com/syndtr/gocapability v0.0.0-20200815063812-42c35b437635
 	github.com/urfave/cli/v2 v2.3.0
 	github.com/vishvananda/netlink v1.1.1-0.20201029203352-d40f9887b852
-	golang.org/x/net v0.0.0-20210316092652-d523dce5a7f4
+	golang.org/x/net v0.0.0-20210428140749-89ef3d95e781
 	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c
-	golang.org/x/sys v0.0.0-20210324051608-47abb6519492
+	golang.org/x/sys v0.0.0-20210426230700-d19ff857e887
 	google.golang.org/grpc v1.37.0
 	k8s.io/api v0.21.0
 	k8s.io/apimachinery v0.21.0
