@@ -76,11 +76,12 @@ type storageImageDestination struct {
 	indexToStorageID map[int]*string
 	// All accesses to below data are protected by `lock` which is made
 	// *explicit* in the code.
-	blobDiffIDs       map[digest.Digest]digest.Digest // Mapping from layer blobsums to their corresponding DiffIDs
-	fileSizes         map[digest.Digest]int64         // Mapping from layer blobsums to their sizes
-	filenames         map[digest.Digest]string        // Mapping from layer blobsums to names of files we used to hold them
-	currentIndex      int                             // The index of the layer to be committed (i.e., lower indices have already been committed)
-	indexToPulledBlob map[int]*types.BlobInfo         // Mapping from layer (by index) to pulled down blob
+	blobDiffIDs         map[digest.Digest]digest.Digest           // Mapping from layer blobsums to their corresponding DiffIDs
+	fileSizes           map[digest.Digest]int64                   // Mapping from layer blobsums to their sizes
+	filenames           map[digest.Digest]string                  // Mapping from layer blobsums to names of files we used to hold them
+	currentIndex        int                                       // The index of the layer to be committed (i.e., lower indices have already been committed)
+	indexToPulledBlob   map[int]*types.BlobInfo                   // Mapping from layer (by index) to pulled down blob
+	blobAdditionalLayer map[digest.Digest]storage.AdditionalLayer // Mapping from layer blobsums to their corresponding additional layer
 }
 
 type storageImageCloser struct {
@@ -391,16 +392,17 @@ func newImageDestination(sys *types.SystemContext, imageRef storageReference) (*
 		return nil, errors.Wrapf(err, "error creating a temporary directory")
 	}
 	image := &storageImageDestination{
-		imageRef:          imageRef,
-		directory:         directory,
-		signatureses:      make(map[digest.Digest][]byte),
-		blobDiffIDs:       make(map[digest.Digest]digest.Digest),
-		fileSizes:         make(map[digest.Digest]int64),
-		filenames:         make(map[digest.Digest]string),
-		SignatureSizes:    []int{},
-		SignaturesSizes:   make(map[digest.Digest][]int),
-		indexToStorageID:  make(map[int]*string),
-		indexToPulledBlob: make(map[int]*types.BlobInfo),
+		imageRef:            imageRef,
+		directory:           directory,
+		signatureses:        make(map[digest.Digest][]byte),
+		blobDiffIDs:         make(map[digest.Digest]digest.Digest),
+		blobAdditionalLayer: make(map[digest.Digest]storage.AdditionalLayer),
+		fileSizes:           make(map[digest.Digest]int64),
+		filenames:           make(map[digest.Digest]string),
+		SignatureSizes:      []int{},
+		SignaturesSizes:     make(map[digest.Digest][]int),
+		indexToStorageID:    make(map[int]*string),
+		indexToPulledBlob:   make(map[int]*types.BlobInfo),
 	}
 	return image, nil
 }
@@ -411,8 +413,11 @@ func (s *storageImageDestination) Reference() types.ImageReference {
 	return s.imageRef
 }
 
-// Close cleans up the temporary directory.
+// Close cleans up the temporary directory and additional layer store handlers.
 func (s *storageImageDestination) Close() error {
+	for _, al := range s.blobAdditionalLayer {
+		al.Release()
+	}
 	return os.RemoveAll(s.directory)
 }
 
@@ -444,7 +449,7 @@ func (s *storageImageDestination) PutBlobWithOptions(ctx context.Context, stream
 		return info, nil
 	}
 
-	return info, s.queueOrCommit(ctx, info, *options.LayerIndex)
+	return info, s.queueOrCommit(ctx, info, *options.LayerIndex, options.EmptyLayer)
 }
 
 // HasThreadSafePutBlob indicates whether PutBlob can be executed concurrently.
@@ -532,12 +537,39 @@ func (s *storageImageDestination) PutBlob(ctx context.Context, stream io.Reader,
 // used the together.  Mixing the two with the non "WithOptions" functions
 // is not supported.
 func (s *storageImageDestination) TryReusingBlobWithOptions(ctx context.Context, blobinfo types.BlobInfo, options internalTypes.TryReusingBlobOptions) (bool, types.BlobInfo, error) {
-	reused, info, err := s.TryReusingBlob(ctx, blobinfo, options.Cache, options.CanSubstitute)
+	reused, info, err := s.tryReusingBlobWithSrcRef(ctx, blobinfo, options.Cache, options.CanSubstitute, options.SrcRef)
 	if err != nil || !reused || options.LayerIndex == nil {
 		return reused, info, err
 	}
 
-	return reused, info, s.queueOrCommit(ctx, info, *options.LayerIndex)
+	return reused, info, s.queueOrCommit(ctx, info, *options.LayerIndex, options.EmptyLayer)
+}
+
+// tryReusingBlobWithSrcRef is a wrapper around TryReusingBlob.
+// If ref is provided, this function first tries to get layer from Additional Layer Store.
+func (s *storageImageDestination) tryReusingBlobWithSrcRef(ctx context.Context, blobinfo types.BlobInfo, cache types.BlobInfoCache, canSubstitute bool, ref reference.Named) (bool, types.BlobInfo, error) {
+	// lock the entire method as it executes fairly quickly
+	s.lock.Lock()
+	defer s.lock.Unlock()
+
+	if ref != nil {
+		// Check if we have the layer in the underlying additional layer store.
+		aLayer, err := s.imageRef.transport.store.LookupAdditionalLayer(blobinfo.Digest, ref.String())
+		if err != nil && errors.Cause(err) != storage.ErrLayerUnknown {
+			return false, types.BlobInfo{}, errors.Wrapf(err, `Error looking for compressed layers with digest %q and labels`, blobinfo.Digest)
+		} else if err == nil {
+			// Record the uncompressed value so that we can use it to calculate layer IDs.
+			s.blobDiffIDs[blobinfo.Digest] = aLayer.UncompressedDigest()
+			s.blobAdditionalLayer[blobinfo.Digest] = aLayer
+			return true, types.BlobInfo{
+				Digest:    blobinfo.Digest,
+				Size:      aLayer.CompressedSize(),
+				MediaType: blobinfo.MediaType,
+			}, nil
+		}
+	}
+
+	return s.tryReusingBlobLocked(ctx, blobinfo, cache, canSubstitute)
 }
 
 // TryReusingBlob checks whether the transport already contains, or can efficiently reuse, a blob, and if so, applies it to the current destination
@@ -553,6 +585,13 @@ func (s *storageImageDestination) TryReusingBlob(ctx context.Context, blobinfo t
 	// lock the entire method as it executes fairly quickly
 	s.lock.Lock()
 	defer s.lock.Unlock()
+
+	return s.tryReusingBlobLocked(ctx, blobinfo, cache, canSubstitute)
+}
+
+// tryReusingBlobLocked implements a core functionality of TryReusingBlob.
+// This must be called with a lock being held on storageImageDestination.
+func (s *storageImageDestination) tryReusingBlobLocked(ctx context.Context, blobinfo types.BlobInfo, cache types.BlobInfoCache, canSubstitute bool) (bool, types.BlobInfo, error) {
 	if blobinfo.Digest == "" {
 		return false, types.BlobInfo{}, errors.Errorf(`Can not check for a blob with unknown digest`)
 	}
@@ -692,7 +731,7 @@ func (s *storageImageDestination) getConfigBlob(info types.BlobInfo) ([]byte, er
 // queueOrCommit queues in the specified blob to be committed to the storage.
 // If no other goroutine is already committing layers, the layer and all
 // subsequent layers (if already queued) will be committed to the storage.
-func (s *storageImageDestination) queueOrCommit(ctx context.Context, blob types.BlobInfo, index int) error {
+func (s *storageImageDestination) queueOrCommit(ctx context.Context, blob types.BlobInfo, index int, emptyLayer bool) error {
 	// NOTE: whenever the code below is touched, make sure that all code
 	// paths unlock the lock and to unlock it exactly once.
 	//
@@ -725,7 +764,7 @@ func (s *storageImageDestination) queueOrCommit(ctx context.Context, blob types.
 		s.lock.Unlock()
 		layerInfo := manifest.LayerInfo{
 			BlobInfo:   *info,
-			EmptyLayer: info.Digest == image.GzippedEmptyLayerDigest,
+			EmptyLayer: emptyLayer,
 		}
 		// Note: commitLayer locks on-demand.
 		if err := s.commitLayer(ctx, layerInfo, index); err != nil {
@@ -763,7 +802,7 @@ func (s *storageImageDestination) commitLayer(ctx context.Context, blob manifest
 	}
 
 	// Carry over the previous ID for empty non-base layers.
-	if blob.EmptyLayer && index > 0 {
+	if blob.EmptyLayer {
 		s.indexToStorageID[index] = &lastLayer
 		return nil
 	}
@@ -804,6 +843,20 @@ func (s *storageImageDestination) commitLayer(ctx context.Context, blob manifest
 		s.indexToStorageID[index] = &lastLayer
 		return nil
 	}
+
+	s.lock.Lock()
+	al, ok := s.blobAdditionalLayer[blob.Digest]
+	s.lock.Unlock()
+	if ok {
+		layer, err := al.PutAs(id, lastLayer, nil)
+		if err != nil {
+			return errors.Wrapf(err, "failed to put layer from digest and labels")
+		}
+		lastLayer = layer.ID
+		s.indexToStorageID[index] = &lastLayer
+		return nil
+	}
+
 	// Check if we previously cached a file with that blob's contents.  If we didn't,
 	// then we need to read the desired contents from a layer.
 	s.lock.Lock()
@@ -981,25 +1034,6 @@ func (s *storageImageDestination) Commit(ctx context.Context, unparsedToplevel t
 			return errors.Wrapf(err, "error saving big data %q for image %q", blob.String(), img.ID)
 		}
 	}
-	// Set the reference's name on the image.  We don't need to worry about avoiding duplicate
-	// values because SetNames() will deduplicate the list that we pass to it.
-	if name := s.imageRef.DockerReference(); len(oldNames) > 0 || name != nil {
-		names := []string{}
-		if name != nil {
-			names = append(names, name.String())
-		}
-		if len(oldNames) > 0 {
-			names = append(names, oldNames...)
-		}
-		if err := s.imageRef.transport.store.SetNames(img.ID, names); err != nil {
-			if _, err2 := s.imageRef.transport.store.DeleteImage(img.ID, true); err2 != nil {
-				logrus.Debugf("error deleting incomplete image %q: %v", img.ID, err2)
-			}
-			logrus.Debugf("error setting names %v on image %q: %v", names, img.ID, err)
-			return errors.Wrapf(err, "error setting names %v on image %q", names, img.ID)
-		}
-		logrus.Debugf("set names of image %q to %v", img.ID, names)
-	}
 	// Save the unparsedToplevel's manifest.
 	if len(toplevelManifest) != 0 {
 		manifestDigest, err := manifest.Digest(toplevelManifest)
@@ -1076,6 +1110,25 @@ func (s *storageImageDestination) Commit(ctx context.Context, unparsedToplevel t
 			return errors.Wrapf(err, "error saving metadata for image %q", img.ID)
 		}
 		logrus.Debugf("saved image metadata %q", string(metadata))
+	}
+	// Set the reference's name on the image.  We don't need to worry about avoiding duplicate
+	// values because SetNames() will deduplicate the list that we pass to it.
+	if name := s.imageRef.DockerReference(); len(oldNames) > 0 || name != nil {
+		names := []string{}
+		if name != nil {
+			names = append(names, name.String())
+		}
+		if len(oldNames) > 0 {
+			names = append(names, oldNames...)
+		}
+		if err := s.imageRef.transport.store.SetNames(img.ID, names); err != nil {
+			if _, err2 := s.imageRef.transport.store.DeleteImage(img.ID, true); err2 != nil {
+				logrus.Debugf("error deleting incomplete image %q: %v", img.ID, err2)
+			}
+			logrus.Debugf("error setting names %v on image %q: %v", names, img.ID, err)
+			return errors.Wrapf(err, "error setting names %v on image %q", names, img.ID)
+		}
+		logrus.Debugf("set names of image %q to %v", img.ID, names)
 	}
 	return nil
 }
