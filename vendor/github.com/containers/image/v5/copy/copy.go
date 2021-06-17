@@ -29,10 +29,10 @@ import (
 	imgspecv1 "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
-	"github.com/vbauerster/mpb/v6"
-	"github.com/vbauerster/mpb/v6/decor"
-	"golang.org/x/crypto/ssh/terminal"
+	"github.com/vbauerster/mpb/v7"
+	"github.com/vbauerster/mpb/v7/decor"
 	"golang.org/x/sync/semaphore"
+	"golang.org/x/term"
 )
 
 type digestingReader struct {
@@ -860,7 +860,7 @@ func (ic *imageCopier) noPendingManifestUpdates() bool {
 // isTTY returns true if the io.Writer is a file and a tty.
 func isTTY(w io.Writer) bool {
 	if f, ok := w.(*os.File); ok {
-		return terminal.IsTerminal(int(f.Fd()))
+		return term.IsTerminal(int(f.Fd()))
 	}
 	return false
 }
@@ -889,6 +889,18 @@ func (ic *imageCopier) copyLayers(ctx context.Context) error {
 		err      error
 	}
 
+	// The manifest is used to extract the information whether a given
+	// layer is empty.
+	manifestBlob, manifestType, err := ic.src.Manifest(ctx)
+	if err != nil {
+		return err
+	}
+	man, err := manifest.FromBlob(manifestBlob, manifestType)
+	if err != nil {
+		return err
+	}
+	manifestLayerInfos := man.LayerInfos()
+
 	// copyGroup is used to determine if all layers are copied
 	copyGroup := sync.WaitGroup{}
 
@@ -906,7 +918,7 @@ func (ic *imageCopier) copyLayers(ctx context.Context) error {
 	}
 
 	data := make([]copyLayerData, numLayers)
-	copyLayerHelper := func(index int, srcLayer types.BlobInfo, toEncrypt bool, pool *mpb.Progress) {
+	copyLayerHelper := func(index int, srcLayer types.BlobInfo, toEncrypt bool, pool *mpb.Progress, srcRef reference.Named) {
 		defer copySemaphore.Release(1)
 		defer copyGroup.Done()
 		cld := copyLayerData{}
@@ -921,7 +933,7 @@ func (ic *imageCopier) copyLayers(ctx context.Context) error {
 				logrus.Debugf("Skipping foreign layer %q copy to %s", cld.destInfo.Digest, ic.c.dest.Reference().Transport().Name())
 			}
 		} else {
-			cld.destInfo, cld.diffID, cld.err = ic.copyLayer(ctx, srcLayer, toEncrypt, pool, index)
+			cld.destInfo, cld.diffID, cld.err = ic.copyLayer(ctx, srcLayer, toEncrypt, pool, index, srcRef, manifestLayerInfos[index].EmptyLayer)
 		}
 		data[index] = cld
 	}
@@ -958,7 +970,7 @@ func (ic *imageCopier) copyLayers(ctx context.Context) error {
 				return errors.Wrapf(err, "Can't acquire semaphore")
 			}
 			copyGroup.Add(1)
-			go copyLayerHelper(i, srcLayer, encLayerBitmap[i], progressPool)
+			go copyLayerHelper(i, srcLayer, encLayerBitmap[i], progressPool, ic.c.rawSource.Reference().DockerReference())
 		}
 
 		// A call to copyGroup.Wait() is done at this point by the defer above.
@@ -1090,8 +1102,9 @@ func (c *copier) createProgressBar(pool *mpb.Progress, info types.BlobInfo, kind
 			),
 		)
 	} else {
+		sstyle := mpb.SpinnerStyle(".", "..", "...", "....", "").PositionLeft()
 		bar = pool.Add(0,
-			mpb.NewSpinnerFiller([]string{".", "..", "...", "....", ""}, mpb.SpinnerOnLeft),
+			sstyle.Build(),
 			mpb.BarFillerClearOnComplete(),
 			mpb.PrependDecorators(
 				decor.OnComplete(decor.Name(prefix), onComplete),
@@ -1117,7 +1130,7 @@ func (c *copier) copyConfig(ctx context.Context, src types.Image) error {
 			progressPool, progressCleanup := c.newProgressPool(ctx)
 			defer progressCleanup()
 			bar := c.createProgressBar(progressPool, srcInfo, "config", "done")
-			destInfo, err := c.copyBlobFromStream(ctx, bytes.NewReader(configBlob), srcInfo, nil, false, true, false, bar, -1)
+			destInfo, err := c.copyBlobFromStream(ctx, bytes.NewReader(configBlob), srcInfo, nil, false, true, false, bar, -1, false)
 			if err != nil {
 				return types.BlobInfo{}, err
 			}
@@ -1143,7 +1156,8 @@ type diffIDResult struct {
 
 // copyLayer copies a layer with srcInfo (with known Digest and Annotations and possibly known Size) in src to dest, perhaps (de/re/)compressing it,
 // and returns a complete blobInfo of the copied layer, and a value for LayerDiffIDs if diffIDIsNeeded
-func (ic *imageCopier) copyLayer(ctx context.Context, srcInfo types.BlobInfo, toEncrypt bool, pool *mpb.Progress, layerIndex int) (types.BlobInfo, digest.Digest, error) {
+// srcRef can be used as an additional hint to the destination during checking whehter a layer can be reused but srcRef can be nil.
+func (ic *imageCopier) copyLayer(ctx context.Context, srcInfo types.BlobInfo, toEncrypt bool, pool *mpb.Progress, layerIndex int, srcRef reference.Named, emptyLayer bool) (types.BlobInfo, digest.Digest, error) {
 	// If the srcInfo doesn't contain compression information, try to compute it from the
 	// MediaType, which was either read from a manifest by way of LayerInfos() or constructed
 	// by LayerInfosForCopy(), if it was supplied at all.  If we succeed in copying the blob,
@@ -1189,8 +1203,10 @@ func (ic *imageCopier) copyLayer(ctx context.Context, srcInfo types.BlobInfo, to
 			options := internalTypes.TryReusingBlobOptions{
 				Cache:         ic.c.blobInfoCache,
 				CanSubstitute: ic.canSubstituteBlobs,
-				LayerIndex:    &layerIndex,
+				SrcRef:        srcRef,
+				EmptyLayer:    emptyLayer,
 			}
+			options.LayerIndex = &layerIndex
 			reused, blobInfo, err = dest.TryReusingBlobWithOptions(ctx, srcInfo, options)
 		} else {
 			reused, blobInfo, err = ic.c.dest.TryReusingBlob(ctx, srcInfo, ic.c.blobInfoCache, ic.canSubstituteBlobs)
@@ -1237,7 +1253,7 @@ func (ic *imageCopier) copyLayer(ctx context.Context, srcInfo types.BlobInfo, to
 
 	bar := ic.c.createProgressBar(pool, srcInfo, "blob", "done")
 
-	blobInfo, diffIDChan, err := ic.copyLayerFromStream(ctx, srcStream, types.BlobInfo{Digest: srcInfo.Digest, Size: srcBlobSize, MediaType: srcInfo.MediaType, Annotations: srcInfo.Annotations}, diffIDIsNeeded, toEncrypt, bar, layerIndex)
+	blobInfo, diffIDChan, err := ic.copyLayerFromStream(ctx, srcStream, types.BlobInfo{Digest: srcInfo.Digest, Size: srcBlobSize, MediaType: srcInfo.MediaType, Annotations: srcInfo.Annotations}, diffIDIsNeeded, toEncrypt, bar, layerIndex, emptyLayer)
 	if err != nil {
 		return types.BlobInfo{}, "", err
 	}
@@ -1268,7 +1284,7 @@ func (ic *imageCopier) copyLayer(ctx context.Context, srcInfo types.BlobInfo, to
 // perhaps (de/re/)compressing the stream,
 // and returns a complete blobInfo of the copied blob and perhaps a <-chan diffIDResult if diffIDIsNeeded, to be read by the caller.
 func (ic *imageCopier) copyLayerFromStream(ctx context.Context, srcStream io.Reader, srcInfo types.BlobInfo,
-	diffIDIsNeeded bool, toEncrypt bool, bar *mpb.Bar, layerIndex int) (types.BlobInfo, <-chan diffIDResult, error) {
+	diffIDIsNeeded bool, toEncrypt bool, bar *mpb.Bar, layerIndex int, emptyLayer bool) (types.BlobInfo, <-chan diffIDResult, error) {
 	var getDiffIDRecorder func(compression.DecompressorFunc) io.Writer // = nil
 	var diffIDChan chan diffIDResult
 
@@ -1293,7 +1309,7 @@ func (ic *imageCopier) copyLayerFromStream(ctx context.Context, srcStream io.Rea
 		}
 	}
 
-	blobInfo, err := ic.c.copyBlobFromStream(ctx, srcStream, srcInfo, getDiffIDRecorder, ic.canModifyManifest, false, toEncrypt, bar, layerIndex) // Sets err to nil on success
+	blobInfo, err := ic.c.copyBlobFromStream(ctx, srcStream, srcInfo, getDiffIDRecorder, ic.canModifyManifest, false, toEncrypt, bar, layerIndex, emptyLayer) // Sets err to nil on success
 	return blobInfo, diffIDChan, err
 	// We need the defer … pipeWriter.CloseWithError() to happen HERE so that the caller can block on reading from diffIDChan
 }
@@ -1345,7 +1361,7 @@ func (r errorAnnotationReader) Read(b []byte) (n int, err error) {
 // and returns a complete blobInfo of the copied blob.
 func (c *copier) copyBlobFromStream(ctx context.Context, srcStream io.Reader, srcInfo types.BlobInfo,
 	getOriginalLayerCopyWriter func(decompressor compression.DecompressorFunc) io.Writer,
-	canModifyBlob bool, isConfig bool, toEncrypt bool, bar *mpb.Bar, layerIndex int) (types.BlobInfo, error) {
+	canModifyBlob bool, isConfig bool, toEncrypt bool, bar *mpb.Bar, layerIndex int, emptyLayer bool) (types.BlobInfo, error) {
 	if isConfig { // This is guaranteed by the caller, but set it here to be explicit.
 		canModifyBlob = false
 	}
@@ -1548,8 +1564,9 @@ func (c *copier) copyBlobFromStream(ctx context.Context, srcStream io.Reader, sr
 	dest, ok := c.dest.(internalTypes.ImageDestinationWithOptions)
 	if ok {
 		options := internalTypes.PutBlobOptions{
-			Cache:    c.blobInfoCache,
-			IsConfig: isConfig,
+			Cache:      c.blobInfoCache,
+			IsConfig:   isConfig,
+			EmptyLayer: emptyLayer,
 		}
 		if !isConfig {
 			options.LayerIndex = &layerIndex
