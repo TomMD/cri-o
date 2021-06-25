@@ -25,7 +25,8 @@ import (
 	"github.com/containers/storage/pkg/idtools"
 	"github.com/containers/storage/pkg/pools"
 	"github.com/containers/storage/pkg/system"
-	rsystem "github.com/opencontainers/runc/libcontainer/system"
+	"github.com/containers/storage/pkg/unshare"
+	"github.com/opencontainers/runc/libcontainer/userns"
 	"golang.org/x/sys/unix"
 )
 
@@ -205,7 +206,7 @@ func DirCopy(srcDir, dstDir string, copyMode Mode, copyXattrs bool) error {
 			s.Close()
 
 		case mode&os.ModeDevice != 0:
-			if rsystem.RunningInUserNS() {
+			if userns.RunningInUserNS() {
 				// cannot create a device if running in user namespace
 				return nil
 			}
@@ -291,6 +292,10 @@ func doCopyXattrs(srcPath, dstPath string) error {
 				return err
 			}
 		}
+	}
+
+	if unshare.IsRootless() {
+		return nil
 	}
 
 	// We need to copy this attribute if it appears in an overlay upper layer, as
