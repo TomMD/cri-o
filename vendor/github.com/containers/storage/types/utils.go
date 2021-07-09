@@ -2,7 +2,6 @@ package types
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -75,12 +74,9 @@ func getRootlessRuntimeDirIsolated(env rootlessRuntimeDirEnvironment) (string, e
 		return runtimeDir, nil
 	}
 
-	initCommand, err := ioutil.ReadFile(env.getProcCommandFile())
-	if err != nil || string(initCommand) == "systemd" {
-		runUserDir := env.getRunUserDir()
-		if isRootlessRuntimeDirOwner(runUserDir, env) {
-			return runUserDir, nil
-		}
+	runUserDir := env.getRunUserDir()
+	if isRootlessRuntimeDirOwner(runUserDir, env) {
+		return runUserDir, nil
 	}
 
 	tmpPerUserDir := env.getTmpPerUserDir()
@@ -156,12 +152,18 @@ func getRootlessUID() int {
 
 func expandEnvPath(path string, rootlessUID int) (string, error) {
 	path = strings.Replace(path, "$UID", strconv.Itoa(rootlessUID), -1)
-	path = os.ExpandEnv(path)
-	return path, nil
+	return filepath.Clean(os.ExpandEnv(path)), nil
 }
 
 func DefaultConfigFile(rootless bool) (string, error) {
-	if defaultConfigFileSet || !rootless {
+	if defaultConfigFileSet {
+		return defaultConfigFile, nil
+	}
+
+	if path, ok := os.LookupEnv("CONTAINERS_STORAGE_CONF"); ok {
+		return path, nil
+	}
+	if !rootless {
 		return defaultConfigFile, nil
 	}
 
