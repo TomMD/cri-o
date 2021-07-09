@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 
+	"github.com/containers/image/v5/docker/reference"
 	publicTypes "github.com/containers/image/v5/types"
 )
 
@@ -38,6 +39,8 @@ type PutBlobOptions struct {
 	Cache publicTypes.BlobInfoCache
 	// Denotes whether the blob is a config or not.
 	IsConfig bool
+	// Indicates an empty layer.
+	EmptyLayer bool
 	// The corresponding index in the layer slice.
 	LayerIndex *int
 }
@@ -48,6 +51,10 @@ type TryReusingBlobOptions struct {
 	Cache publicTypes.BlobInfoCache
 	// Use an equivalent of the desired blob.
 	CanSubstitute bool
+	// Indicates an empty layer.
+	EmptyLayer bool
 	// The corresponding index in the layer slice.
 	LayerIndex *int
+	// The reference of the image that contains the target blob.
+	SrcRef reference.Named
 }
